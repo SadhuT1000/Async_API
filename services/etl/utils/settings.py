@@ -20,8 +20,7 @@ class Settings(BaseSettings):
     postgres_db: str
     postgres_host: str
     postgres_port: str
-    es_host: str
-    es_port: str
+    es_url: str
     project_name: str
     redis_host: str
     redis_port: str

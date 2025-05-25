@@ -20,4 +20,4 @@ services:
     ports:
       - "9200:9200"
     environment:
-      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      - ES_JAVA_OPTS=-Xms200m -Xmx200m

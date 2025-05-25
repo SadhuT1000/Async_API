@@ -1,10 +1,10 @@
-import datetime
+from datetime import datetime
 from typing import Dict, List, Tuple
 
 import psycopg
 from psycopg import ClientCursor, Cursor
 from psycopg.rows import dict_row
-from schemas.elasticsearch import ESMovieDocument, Genre, Person
+from schemas.elasticsearch import ESMovieDocument, Genre, GenreBaseInfo, Person
 from utils.backoff import backoff
 from utils.logging_settings import logger
 from utils.state import State
@@ -18,34 +18,38 @@ class PostgresProducer:
     def _get_modified_ids(
         self, table_name: str, cursor: Cursor, state_prefix: str = ""
     ) -> List[str]:
-        date_time = self.state.get_state(
-            f"{state_prefix}_{table_name}_proceed_date_time"
+        state_key = f"{state_prefix}_{table_name}_state"
+        state = self.state.get_state_json(state_key)
+
+        proceed_timestamp, proceed_id = (
+            state
+            if state
+            else (datetime.min.isoformat(), "00000000-0000-0000-0000-000000000000")
         )
-        if not date_time:
-            date_time = datetime.datetime.min
-        else:
-            date_time = datetime.datetime.fromisoformat(date_time)
 
         query = f"""
                     SELECT id, modified
                     FROM content.{table_name}
-                    WHERE modified > %s
-                    ORDER BY modified
+                    WHERE modified > %s OR (modified = %s AND id > %s)
+                    ORDER BY modified, id
                     LIMIT 100;
                 """  # noqa: E702, E231, E241
 
-        cursor.execute(query, (date_time.isoformat(),))
+        cursor.execute(query, (proceed_timestamp, proceed_timestamp, proceed_id))
         data: Tuple[dict] = cursor.fetchall()  # type: ignore
 
         if len(data) == 0:
             return []
 
-        checkpoint_datetime = data[-1]["modified"]
+        last_processed_timestamp = data[-1]["modified"].isoformat()
+        last_processed_id = str(data[-1]["id"])
+
         logger.info(
-            f"{table_name}_proceed_date_time: {checkpoint_datetime.isoformat()}"
+            f"{table_name}: last_processed_timestamp: {last_processed_timestamp}, last_processed_id: {last_processed_id}"
         )
-        self.state.set_state(
-            f"{table_name}_proceed_date_time", checkpoint_datetime.isoformat()
+
+        self.state.set_state_json(
+            state_key, [last_processed_timestamp, last_processed_id]
         )
 
         return [str(item["id"]) for item in data]
@@ -79,6 +83,7 @@ class PostgresProducer:
                         pfw.role as pfw_role,
                         p.id as p_id,
                         p.full_name as p_full_name,
+                        g.id as g_id,
                         g.name as g_name
                     FROM content.film_work fw
                     LEFT JOIN content.person_film_work pfw ON pfw.film_work_id = fw.id
@@ -105,6 +110,7 @@ class PostgresProducer:
                     description=row["fw_description"],
                     imdb_rating=row["fw_rating"],
                     genres=set(),
+                    genres_names=set(),
                     actors=set(),
                     actors_names=set(),
                     directors=set(),
@@ -114,22 +120,23 @@ class PostgresProducer:
                 )
                 docs[row["fw_id"]] = doc
 
-            genre = row.get("g_name")
-            if genre:
+            if row.get("g_id"):
+                genre = GenreBaseInfo(id=row.get("g_id"), name=row.get("g_name"))
                 doc.genres.add(genre)
-            if not row.get("p_id"):
-                continue
-            person = Person(id=row["p_id"], name=row["p_full_name"])
-            role = row.get("pfw_role")
-            if role == "actor":
-                doc.actors.add(person)
-                doc.actors_names.add(person.name)
-            elif role == "writer":
-                doc.writers.add(person)
-                doc.writers_names.add(person.name)
-            elif role == "director":
-                doc.directors.add(person)
-                doc.directors_names.add(person.name)
+                doc.genres_names.add(genre.name)
+
+            if row.get("p_id"):
+                person = Person(id=row["p_id"], name=row["p_full_name"])
+                role = row.get("pfw_role")
+                if role == "actor":
+                    doc.actors.add(person)
+                    doc.actors_names.add(person.name)
+                elif role == "writer":
+                    doc.writers.add(person)
+                    doc.writers_names.add(person.name)
+                elif role == "director":
+                    doc.directors.add(person)
+                    doc.directors_names.add(person.name)
         return docs
 
     def get_films_with_modified_genres(

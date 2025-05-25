@@ -1,61 +1,138 @@
+import json
 from functools import lru_cache
-from typing import Annotated, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
+from db.elastic import get_elastic
+from db.redis import get_redis
 from elasticsearch import AsyncElasticsearch, NotFoundError
 from fastapi import Depends
 from models.film import Film
 from redis.asyncio import Redis
 
-from db.elastic import get_elastic
-from db.redis import get_redis
-
-FILM_CACHE_EXPIRE_IN_SECONDS = 60 * 5  # 5 минут
+FILM_CACHE_EXPIRE_IN_SECONDS = 60 * 5
+FILM_LIST_CACHE_EXPIRE_IN_SECONDS = 1
 
 
 class FilmService:
+    INDEX = "movies"
+
     def __init__(self, redis: Redis, elastic: AsyncElasticsearch):
         self.redis = redis
         self.elastic = elastic
 
-    # get_by_id возвращает объект фильма. Он опционален, так как фильм может отсутствовать в базе
     async def get_by_id(self, film_id: str) -> Optional[Film]:
-        # Пытаемся получить данные из кеша, потому что оно работает быстрее
-        film = await self._film_from_cache(film_id)
-        if not film:
-            # Если фильма нет в кеше, то ищем его в Elasticsearch
-            film = await self._get_film_from_elastic(film_id)
-            if not film:
-                # Если он отсутствует в Elasticsearch, значит, фильма вообще нет в базе
-                return None
-            # Сохраняем фильм в кеш
-            await self._put_film_to_cache(film)
+        redis_key = f"film:{film_id}"
 
-        return film
+        cached_film = await self.redis.get(redis_key)
+        if cached_film:
+            return Film.model_validate_json(cached_film)
 
-    async def _get_film_from_elastic(self, film_id: str) -> Optional[Film]:
         try:
-            doc = await self.elastic.get(index="movies", id=film_id)
+            film_doc = await self.elastic.get(index=self.INDEX, id=film_id)
         except NotFoundError:
             return None
-        return Film(**doc["_source"])
 
-    async def _film_from_cache(self, film_id: str) -> Optional[Film]:
-        # Пытаемся получить данные о фильме из кеша, используя команду get
-        # https://redis.io/commands/get/
-        data = await self.redis.get(film_id)
-        if not data:
-            return None
+        film = Film(**film_doc["_source"])
 
-        # pydantic предоставляет удобное API для создания объекта моделей из json
-        film = Film.parse_raw(data)
+        await self.redis.set(
+            redis_key,
+            film.model_dump_json(),
+            FILM_CACHE_EXPIRE_IN_SECONDS,
+        )
+
         return film
 
-    async def _put_film_to_cache(self, film: Film):
-        # Сохраняем данные о фильме, используя команду set
-        # Выставляем время жизни кеша — 5 минут
-        # https://redis.io/commands/set/
-        # pydantic позволяет сериализовать модель в json
-        await self.redis.set(film.id, film.json(), FILM_CACHE_EXPIRE_IN_SECONDS)
+    async def search_films(
+        self,
+        query: str,
+        page_size: int,
+        page_number: int,
+    ) -> List[Film]:
+        redis_key = f"film:search:{query}:{page_size}:{page_number}"
+
+        cached_films = await self._get_films_from_cache(redis_key)
+        if cached_films:
+            return cached_films
+
+        films = await self._get_films_from_elastic(
+            {
+                "query": {
+                    "multi_match": {
+                        "query": query,
+                        "fields": [
+                            "title^3",
+                            "description",
+                            "genres_names",
+                            "actors_names",
+                            "directors_names",
+                            "writers_names",
+                        ],
+                        "fuzziness": "AUTO",
+                    },
+                },
+                "from": (page_number - 1) * page_size,
+                "size": page_size,
+            },
+        )
+
+        await self._save_films_to_cache(redis_key, films)
+
+        return films
+
+    async def list_films(
+        self,
+        sort: str = "imdb_rating",
+        genre_id: Optional[str] = None,
+        page_size: int = 50,
+        page_number: int = 1,
+    ) -> List[Film]:
+        redis_key = f"films:list:{sort}:{genre_id}:{page_size}:{page_number}"
+
+        cached_films = await self._get_films_from_cache(redis_key)
+        if cached_films:
+            return cached_films
+
+        sort_field = sort.lstrip("-")
+        order = "desc" if sort.startswith("-") else "asc"
+
+        films = await self._get_films_from_elastic(
+            {
+                "query": (
+                    {"match_all": {}}
+                    if genre_id is None
+                    else {
+                        "nested": {
+                            "path": "genres",
+                            "query": {"term": {"genres.id": genre_id}},
+                        }
+                    }
+                ),
+                "sort": [{sort_field: {"order": order}}],
+                "from": (page_number - 1) * page_size,
+                "size": page_size,
+            },
+        )
+
+        await self._save_films_to_cache(redis_key, films)
+
+        return films
+
+    async def _get_films_from_elastic(self, body: Dict[str, Any]) -> List[Film]:
+        docs = await self.elastic.search(index=self.INDEX, body=body)
+        return [Film(**hit["_source"]) for hit in docs["hits"]["hits"]]
+
+    async def _save_films_to_cache(self, redis_key: str, films: List[Film]) -> None:
+        await self.redis.set(
+            redis_key,
+            json.dumps([f.model_dump(mode="json") for f in films]),
+            FILM_LIST_CACHE_EXPIRE_IN_SECONDS,
+        )
+
+    async def _get_films_from_cache(self, redis_key: str) -> Optional[List[Film]]:
+        cached_films = await self.redis.get(redis_key)
+        if cached_films:
+            return [Film.model_validate(item) for item in json.loads(cached_films)]
+        return None
 
 
 @lru_cache()

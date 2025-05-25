@@ -21,22 +21,21 @@ if __name__ == "__main__":
     state = State(storage=storage)
 
     postgres_producer = PostgresProducer(postgres_connect_data, state)
-    elastic_loader = ElasticSearchLoader(settings.es_host, settings.es_port)
+    elastic_loader = ElasticSearchLoader(settings.es_url)
 
     elastic_loader.create_indexes()
     while True:
         films = postgres_producer.get_films_by_modified_self()
-        elastic_loader.load(films, "movies")
-        time.sleep(1)
+        count = elastic_loader.load(films, "movies")
 
         films = postgres_producer.get_film_works_by_modified_genres()
-        elastic_loader.load(films, "movies")
-        time.sleep(1)
+        count += elastic_loader.load(films, "movies")
 
         films = postgres_producer.get_film_works_by_modified_persons()
-        elastic_loader.load(films, "movies")
-        time.sleep(1)
+        count += elastic_loader.load(films, "movies")
 
         genres = postgres_producer.get_modified_genres()
-        elastic_loader.load(genres, "genres")
-        time.sleep(1)
+        count += elastic_loader.load(genres, "genres")
+
+        if count == 0:
+            time.sleep(1)

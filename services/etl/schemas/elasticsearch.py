@@ -20,13 +20,30 @@ class Person(BaseModel):
         }
 
 
+class GenreBaseInfo(BaseModel):
+    id: UUID  # noqa: VNE003, A003
+    name: str
+
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+    def __eq__(self, other: Any) -> bool:
+        return self.id == other.id
+
+    class Config:
+        json_encoders = {
+            UUID: lambda v: str(v),
+        }
+
+
 class ESMovieDocument(BaseModel):
     id: UUID  # noqa: VNE003, A003
     title: str
     description: str | None
     imdb_rating: float | None
 
-    genres: Set[str]
+    genres: Set[GenreBaseInfo]
+    genres_names: Set[str]
 
     actors: Set[Person]
     actors_names: Set[str]
@@ -43,12 +60,5 @@ class ESMovieDocument(BaseModel):
         }
 
 
-class Genre(BaseModel):
-    id: UUID  # noqa: VNE003, A003
-    name: str
+class Genre(GenreBaseInfo):
     description: str | None
-
-    class Config:
-        json_encoders = {
-            UUID: lambda v: str(v),
-        }

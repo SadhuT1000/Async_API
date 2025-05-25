@@ -48,9 +48,6 @@
       "imdb_rating": {
         "type": "float"
       },
-      "genres": {
-        "type": "keyword"
-      },
       "title": {
         "type": "text",
         "analyzer": "ru_en",
@@ -61,6 +58,10 @@
         }
       },
       "description": {
+        "type": "text",
+        "analyzer": "ru_en"
+      },
+      "genres_names": {
         "type": "text",
         "analyzer": "ru_en"
       },
@@ -75,6 +76,19 @@
       "writers_names": {
         "type": "text",
         "analyzer": "ru_en"
+      },
+      "genres": {
+        "type": "nested",
+        "dynamic": "strict",
+        "properties": {
+          "id": {
+            "type": "keyword"
+          },
+          "name": {
+            "type": "text",
+            "analyzer": "ru_en"
+          }
+        }
       },
       "directors": {
         "type": "nested",
