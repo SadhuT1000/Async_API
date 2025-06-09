@@ -1,0 +1,53 @@
+services:
+  api:
+    build: ../../.
+    image: fastapi-image
+    container_name: theatre-api
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - tests.env
+    environment:
+      POSTGRES_HOST: theatre-db
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:8.0
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+      interval: 30s
+      timeout: 10s
+      retries: 50
+    ports:
+      - "6379:6379"
+
+  elasticsearch:
+    image: elasticsearch:8.6.2
+    healthcheck:
+      test: curl -s http://localhost:9200 >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 50
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: false
+    ports:
+      - "9200:9200"
+
+  tests:
+    image: fastapi-image
+    env_file:
+      - tests.env
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "tests/functional/entrypoint.sh"

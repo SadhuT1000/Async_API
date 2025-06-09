@@ -1,17 +1,10 @@
 version: '3'
 services:
-  gateway:
-      profiles: ["not-dev"]
-
-  api:
+  tests:
     profiles: [ "not-dev" ]
-
-  theatre-db:
+  api:
     ports:
-      - "5432:5432"
-    volumes:
-      - ./tools/database_dump.sql:/docker-entrypoint-initdb.d/init.sql
-
+      - "8000:8000"
   redis:
     ports:
       - "6379:6379"

@@ -17,7 +17,12 @@ RUN  poetry install --only main
 
 COPY . .
 
-RUN chmod +x entrypoint.sh
+RUN chmod +x entrypoint.sh &&  \
+    chmod +x tests/functional/entrypoint.sh && \
+    chmod +x tests/functional/utils/wait_for_es.py && \
+    chmod +x tests/functional/utils/wait_for_redis.py
+
+
 
 EXPOSE 8000
 

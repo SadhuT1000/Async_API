@@ -24,6 +24,11 @@ dependencies = [
 packages = [{include = "*", from = "src"}]
 package-mode = false
 
+[tool.poetry.group.tests.dependencies]
+pytest = "^8.3.5"
+pytest-asyncio = "^1.0.0"
+
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
